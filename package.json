@@ -1,0 +1,36 @@
+{
+  "name": "dingdang",
+  "version": "1.0.1",
+  "private": true,
+  "description": "DingDang Windows file manager",
+  "author": "DingDang",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/files.test.ts tests/tabs.test.ts",
+    "build": "npm run check && vite build && esbuild src/main.ts src/preload.ts --bundle --platform=node --external:electron --format=cjs --out-extension:.js=.cjs --outdir=dist",
+    "start": "npm run build && electron .",
+    "package:win": "npm run build && electron-builder --win nsis --x64"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "electron": "^42.0.0",
+    "electron-builder": "^26.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.0",
+    "vite": "^6.0.0"
+  },
+  "build": {
+    "appId": "io.github.gawainlizheng.dingdang",
+    "productName": "DingDang",
+    "files": ["dist/**/*"],
+    "directories": {"output": "release"},
+    "nsis": {"oneClick": true, "perMachine": false, "allowElevation": false}
+  }
+}
