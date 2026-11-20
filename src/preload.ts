@@ -13,3 +13,5 @@ const api: Files = {
   trashItems: items => ipcRenderer.invoke(channels.trashItems, items),
 };
 contextBridge.exposeInMainWorld('files', api);
+contextBridge.exposeInMainWorld('showWindowsMenu', (path: string, x: number, y: number) =>
+  ipcRenderer.invoke('files:windows-menu', path, x, y));

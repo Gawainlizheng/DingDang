@@ -5,9 +5,15 @@ import { sortEntries, type Column } from './sort';
 import { finishNavigation, folderTab, moveTab, neighborAfterClose, type FolderTab, type Navigation } from './tabs';
 import { TabStrip } from './tab-strip';
 import { ContextMenu, type MenuItem } from './context-menu';
+import type { MenuResult } from './menu-worker';
 import './ui.css';
 
-declare global { interface Window { files: Files } }
+declare global {
+  interface Window {
+    files: Files;
+    showWindowsMenu(path: string, x: number, y: number): Promise<MenuResult>;
+  }
+}
 const api = window.files;
 const columns: [Column, string][] = [['name', '名称'], ['modified', '修改日期'], ['type', '类型'], ['size', '大小']];
 const formatDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' });
@@ -21,6 +27,8 @@ function App() {
   const [tabs, setTabs] = useState(() => [folderTab(0)]);
   const tabsRef = useRef(tabs);
   const [active, setActive] = useState(0);
+  const menuRequest = useRef(0);
+  const nativeMenuPending = useRef(false);
   const nextId = useRef(1);
   const tab = tabs.find(item => item.id === active) ?? tabs[0];
   const { listing, address, history, cursor, selection, column, ascending, notice, loading } = tab;
@@ -73,6 +81,7 @@ function App() {
 
   function go(target: string, mode?: 'refresh' | number) {
     if (!busy.current && target) {
+      ++menuRequest.current;
       setNotice('');
       setResults([]);
       setMenu(undefined);
@@ -105,6 +114,7 @@ function App() {
   }
 
   function switchTo(id: number) {
+    ++menuRequest.current;
     setMenu(undefined);
     setActive(id);
   }
@@ -187,7 +197,7 @@ function App() {
   function showMenu(event: React.MouseEvent, entry?: Entry) {
     event.preventDefault();
     event.stopPropagation();
-    if (pending || loading || !listing) return;
+    if (pending || loading || !listing || nativeMenuPending.current) return;
     const paths = entry ? selected.has(entry.path) ? selection : [entry.path] : [];
     if (entry && !selected.has(entry.path)) patchTab(active, { selection: paths, anchor: entry.path });
     const items: MenuItem[] = [];
@@ -206,7 +216,27 @@ function App() {
       items.push({ label: '移入回收站', run: () => setConfirm(true) });
     }
     const bounds = event.currentTarget.getBoundingClientRect();
-    setMenu({ x: event.clientX || bounds.left, y: event.clientY || bounds.top, items });
+    const x = Math.max(0, event.clientX || bounds.left);
+    const y = Math.max(0, event.clientY || bounds.top);
+    const request = ++menuRequest.current;
+    if (!entry || paths.length !== 1) {
+      setMenu({ x, y, items });
+      return;
+    }
+    setMenu(undefined);
+    nativeMenuPending.current = true;
+    void window.showWindowsMenu(entry.path, x, y).catch(() => 'unavailable' as const).then(result => {
+      if (result === 'open-folder') {
+        if (request === menuRequest.current && tabsRef.current.some(item => item.id === active)) go(entry.path);
+      } else if (result === 'invoked' || result === 'failed') {
+        if (result === 'failed') patchTab(active, { notice: 'Windows 未能执行所选命令' });
+        for (const item of tabsRef.current) {
+          if (item.listing && !item.loading) void navigate(item.id, item.listing.path, 'refresh');
+        }
+      } else if (result === 'unavailable' && request === menuRequest.current) {
+        setMenu({ x, y, items });
+      }
+    }).finally(() => { nativeMenuPending.current = false; });
   }
 
   return <div className="app" onKeyDown={event => {

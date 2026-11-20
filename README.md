@@ -38,3 +38,17 @@ npm run package:win
 - 使用临时目录验证地址栏、前进／后退、排序、批量冲突、同盘和真实跨盘文件及目录移动。单测只模拟跨盘回退，不代替双盘测试。
 - 使用临时测试文件验证权限拒绝、文件占用、回收站不可用时的失败提示；正常移入回收站后，用系统回收站恢复文件。不要用真实用户资料做验收。
 - 首版路径限定本地盘符，不支持直接输入 UNC 和设备路径；复制和移动不跟随文件链接。跨盘目录移动先复制后清理，不是原子操作；有失败时按逐项提示核对两端。
+
+## Windows 原生右键菜单实验
+
+在 `experiment/windows-context-menu` 分支运行 `npm.cmd start`；需要 Visual Studio 的 C++ 桌面开发工具和 Windows SDK。单选项目右键直接打开 Windows 经典菜单；空白区域、多选及原生菜单不可用时使用 DingDang 菜单。系统菜单中的复制和删除遵循 Windows 规则，不使用 DingDang 剪贴板或删除确认。请用临时文件试用。
+
+### 对比右键延迟（CMD）
+
+```cmd
+set "DINGDANG_MENU_TIMING=1"
+set "DINGDANG_MENU_COLD=1"
+npm.cmd start
+```
+
+用同一个临时 JPG 和文件夹分别右击数次，每次按 Esc 关闭。退出应用后执行 `set "DINGDANG_MENU_COLD="`，再运行 `npm.cmd start` 测量预热模式。比较首次和后续的 `elapsedMs`，以及 `startupMs`、`parseMs`、`shellMs`。预热模式通常保持同一个 PID；日志在弹出前采样，不含路径、菜单等待或执行命令的时间。冷启动是同一个实现的逐次启动对照，并非旧版二进制。
