@@ -12,6 +12,7 @@ export function TabStrip({ tabs, active, home, pending, add, close, select, reor
   const suppress = useRef(false);
   const [dragging, setDragging] = useState<number>();
   const [edges, setEdges] = useState({ left: false, right: false });
+  const overflow = edges.left || edges.right;
   function measure() {
     const node = strip.current!;
     setEdges(previous => {
@@ -28,9 +29,16 @@ export function TabStrip({ tabs, active, home, pending, add, close, select, reor
     return () => observer.disconnect();
   }, [tabs]);
   useLayoutEffect(() => {
-    strip.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    const node = strip.current!;
+    const selected = node.querySelector('.tab.active');
+    if (selected) {
+      const viewport = node.getBoundingClientRect();
+      const bounds = selected.getBoundingClientRect();
+      if (bounds.left < viewport.left) node.scrollLeft += bounds.left - viewport.left;
+      else if (bounds.right > viewport.right) node.scrollLeft += bounds.right - viewport.right;
+    }
     measure();
-  }, [active, tabs.length]);
+  }, [active, tabs.length, overflow]);
   useLayoutEffect(() => () => cancelAnimationFrame(frame.current), []);
 
   /** 拖动时每帧按其他标签的中心计算插入位置，靠边时继续滚动。 */
@@ -54,13 +62,19 @@ export function TabStrip({ tabs, active, home, pending, add, close, select, reor
     cancelAnimationFrame(frame.current);
     setDragging(undefined);
   }
-  function page(direction: number) {
+  function step(direction: -1 | 1) {
     const node = strip.current!;
-    node.scrollBy({ left: direction * node.clientWidth * 0.9, behavior: 'smooth' });
+    const left = node.getBoundingClientRect().left;
+    const right = left + node.clientWidth;
+    const bounds = Array.from(node.children, child => child.getBoundingClientRect());
+    const next = direction < 0
+      ? bounds.reverse().find(rect => rect.left < left - 1)
+      : bounds.find(rect => rect.right > right + 1);
+    if (!next) return;
+    node.scrollLeft += direction < 0 ? next.left - left : next.right - right;
+    measure();
   }
-  const overflow = edges.left || edges.right;
   return <div className="tabs">
-    {overflow && <button aria-label="向左滚动标签" disabled={!edges.left} onClick={() => page(-1)}>‹</button>}
     <div ref={strip} onScroll={measure} className="tabStrip" role="tablist" aria-label="文件夹标签页">
       {tabs.map(item => {
         const target = item.listing?.path ?? item.address;
@@ -90,7 +104,12 @@ export function TabStrip({ tabs, active, home, pending, add, close, select, reor
         </div>;
       })}
     </div>
-    {overflow && <button aria-label="向右滚动标签" disabled={!edges.right} onClick={() => page(1)}>›</button>}
-    <button title="新建标签页 (Ctrl+T)" aria-label="新建标签页" disabled={pending || !home} onClick={add}>＋</button>
+    <div className="tabControls">
+      {overflow && <>
+        <button title="向左滚动标签" aria-label="向左滚动标签" disabled={!edges.left} onClick={() => step(-1)}>‹</button>
+        <button title="向右滚动标签" aria-label="向右滚动标签" disabled={!edges.right} onClick={() => step(1)}>›</button>
+      </>}
+      <button title="新建标签页 (Ctrl+T)" aria-label="新建标签页" disabled={pending || !home} onClick={add}>＋</button>
+    </div>
   </div>;
 }
