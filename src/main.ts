@@ -7,11 +7,16 @@ import { channels, type Files } from './contracts';
 import { absolute, fileService } from './service';
 import { windows } from './windows';
 import { menuWorker } from './menu-worker';
+import { tabSessionChannels } from './tab-session';
+import { sessionStore } from './session-store';
 
 const page = path.join(__dirname, 'index.html');
 const trustedUrl = pathToFileURL(page).href;
 const files = fileService(windows);
 let window: BrowserWindow | undefined;
+let sessions: ReturnType<typeof sessionStore> | undefined;
+let quitting = false;
+let flushed = false;
 let menuOpen = false;
 let authorizeMenu: ((pid: number) => boolean) | undefined;
 const nativeDir = path.join(__dirname, '..', '.native-build-a');
@@ -34,6 +39,12 @@ function register<Key extends keyof Files>(key: Key) {
 }
 
 app.whenReady().then(() => {
+  sessions = sessionStore(path.join(app.getPath('userData'), 'tab-session.json'), absolute);
+  ipcMain.handle(tabSessionChannels.load, event => { trusted(event); return sessions!.load(); });
+  ipcMain.handle(tabSessionChannels.save, (event, snapshot: unknown) => {
+    trusted(event);
+    if (!quitting) sessions!.save(snapshot);
+  });
   if (process.platform === 'win32') {
     try {
       authorizeMenu = require(path.join(nativeDir, 'foreground.node')).allowWorkerForeground;
@@ -73,5 +84,14 @@ app.whenReady().then(() => {
   if (process.platform === 'win32') menus.preheat();
   void window.loadFile(page);
 });
-app.on('before-quit', () => menus.stop());
+app.on('before-quit', event => {
+  if (!sessions || flushed) { menus.stop(); return; }
+  event.preventDefault();
+  if (quitting) return;
+  quitting = true;
+  void sessions.flush().finally(() => {
+    flushed = true;
+    app.quit();
+  });
+});
 app.on('window-all-closed', () => app.quit());

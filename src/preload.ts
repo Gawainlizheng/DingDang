@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { channels, type Files } from './contracts';
+import { tabSessionChannels, type TabSession } from './tab-session';
 
 /** 暴露固定方法，不把 ipcRenderer 或任意频道名交给页面。 */
 const api: Files = {
@@ -15,5 +16,9 @@ const api: Files = {
   extractZip: target => ipcRenderer.invoke(channels.extractZip, target),
 };
 contextBridge.exposeInMainWorld('files', api);
+contextBridge.exposeInMainWorld('tabSession', {
+  loadTabSession: () => ipcRenderer.invoke(tabSessionChannels.load),
+  saveTabSession: (snapshot: TabSession) => ipcRenderer.invoke(tabSessionChannels.save, snapshot),
+});
 contextBridge.exposeInMainWorld('showWindowsMenu', (path: string, x: number, y: number) =>
   ipcRenderer.invoke('files:windows-menu', path, x, y));

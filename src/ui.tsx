@@ -7,11 +7,16 @@ import { beginNavigation, finishNavigation, folderTab, moveTab, neighborAfterClo
 import { TabStrip } from './tab-strip';
 import { ContextMenu, type MenuItem } from './context-menu';
 import type { MenuResult } from './menu-worker';
+import { maxSessionTabs, restoreTabSession, sessionSnapshot, type TabSession } from './tab-session';
 import './ui.css';
 
 declare global {
   interface Window {
     files: Files;
+    tabSession: {
+      loadTabSession(): Promise<TabSession | null>;
+      saveTabSession(snapshot: TabSession): Promise<void>;
+    };
     showWindowsMenu(path: string, x: number, y: number): Promise<MenuResult>;
   }
 }
@@ -29,15 +34,31 @@ function App() {
   const [tabs, setTabs] = useState(() => [folderTab(0)]);
   const tabsRef = useRef(tabs);
   const [active, setActive] = useState(0);
+  const activeRef = useRef(0);
+  const restored = useRef(false);
+  const [restoring, setRestoring] = useState(true);
+  const lastSnapshot = useRef('');
   const menuRequest = useRef(0);
   const nativeMenuPending = useRef(false);
   const [systemMenuBusy, setSystemMenuBusy] = useState(false);
   const nextId = useRef(1);
   const tab = tabs.find(item => item.id === active) ?? tabs[0];
   const { listing, address, history, cursor, selection, column, ascending, notice, loading } = tab;
+  function saveSession() {
+    if (!restored.current) return;
+    const snapshot = sessionSnapshot(tabsRef.current, activeRef.current);
+    if (!snapshot) return;
+    const content = JSON.stringify(snapshot);
+    if (content === lastSnapshot.current) return;
+    lastSnapshot.current = content;
+    void window.tabSession.saveTabSession(snapshot).catch(() => {
+      if (lastSnapshot.current === content) lastSnapshot.current = '';
+    });
+  }
   function updateTabs(update: (items: FolderTab[]) => FolderTab[]) {
     tabsRef.current = update(tabsRef.current);
     setTabs(tabsRef.current);
+    saveSession();
   }
   function patchTab(id: number, patch: Partial<FolderTab>) {
     updateTabs(items => items.map(item => item.id === id ? { ...item, ...patch } : item));
@@ -71,10 +92,34 @@ function App() {
   }
 
   useEffect(() => {
-    void api.places().then(paths => {
-      setPlaces(paths);
-      if (paths[0] && tabsRef.current[0]?.request === 0) void navigate(0, paths[0].path);
-    }).catch(error => setNotice(message(error)));
+    async function initialize() {
+      const placesRequest = api.places().then(paths => {
+        setPlaces(paths);
+        return paths;
+      }).catch(error => { setNotice(message(error)); return []; });
+      try {
+        const saved = await window.tabSession.loadTabSession().catch(() => null);
+        if (saved) {
+          const restoredTabs = await restoreTabSession(saved, target => api.listDirectory(target));
+          if (restoredTabs.tabs.length) {
+            const items = restoredTabs.tabs.map(({ listing }) => {
+              const initial = folderTab(nextId.current++, listing.path);
+              return finishNavigation([initial], initial.id, 0, 'push', { listing })[0];
+            });
+            updateTabs(() => items);
+            switchTo(items[restoredTabs.activeIndex].id);
+            return;
+          }
+        }
+        const [home] = await placesRequest;
+        if (home) await navigate(0, home.path);
+      } finally {
+        restored.current = true;
+        setRestoring(false);
+        saveSession();
+      }
+    }
+    void initialize();
   }, []);
 
   useEffect(() => {
@@ -121,10 +166,12 @@ function App() {
     ++menuRequest.current;
     setMenu(undefined);
     setActive(id);
+    activeRef.current = id;
+    saveSession();
   }
 
   function addTab(target = places[0]?.path) {
-    if (!target || busy.current) return;
+    if (!target || busy.current || tabsRef.current.length >= maxSessionTabs) return;
     const id = nextId.current++;
     updateTabs(items => [...items, folderTab(id, target)]);
     switchTo(id);
@@ -180,7 +227,7 @@ function App() {
 
   useEffect(() => {
     function shortcuts(event: KeyboardEvent) {
-      if (event.defaultPrevented || editor || confirm || event.target instanceof HTMLInputElement) return;
+      if (restoring || event.defaultPrevented || editor || confirm || event.target instanceof HTMLInputElement) return;
       const key = event.key.toLowerCase();
       if (event.altKey && !event.ctrlKey && ['arrowleft', 'arrowright', 'arrowup'].includes(key)) {
         event.preventDefault();
@@ -259,6 +306,8 @@ function App() {
       setSystemMenuBusy(false);
     }
   }
+
+  if (restoring) return <p className="empty" role="status">正在恢复标签页…</p>;
 
   return <div className="app" onKeyDown={event => {
     if (pending || loading || menu || editor || confirm || event.target instanceof HTMLInputElement) return;
