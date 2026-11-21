@@ -1,15 +1,29 @@
 import { open, readFile, rename, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { maxSessionTabs, type TabSession } from './tab-session.ts';
+import { httpsUrl } from './address.ts';
 
 export function validateSession(input: unknown, absolute: (input: unknown) => string): TabSession {
   if (!input || typeof input !== 'object') throw new Error('无效的标签会话');
-  const { version, paths, activeIndex } = input as TabSession;
-  if (version !== 1 || !Array.isArray(paths) || !paths.length || paths.length > maxSessionTabs
-      || !Number.isInteger(activeIndex) || activeIndex < 0 || activeIndex >= paths.length) {
+  const { version, paths, entries, activeIndex } = input as {
+    version: unknown; paths: unknown; entries: unknown; activeIndex: number;
+  };
+  const legacy = version === 1;
+  const items = legacy ? paths : version === 2 ? entries : undefined;
+  if (!Array.isArray(items) || !items.length || items.length > maxSessionTabs
+      || !Number.isInteger(activeIndex) || activeIndex < 0 || activeIndex >= items.length) {
     throw new Error('无效的标签会话');
   }
-  return { version, paths: Array.from(paths, target => absolute(target)), activeIndex };
+  return { version: 2, entries: Array.from(items, item => {
+    if (legacy) return { kind: 'folder', path: absolute(item) };
+    const entry = item as { kind?: unknown; path?: unknown; url?: unknown } | null;
+    if (entry?.kind === 'folder') return { kind: 'folder', path: absolute(entry.path) };
+    if (entry?.kind === 'web') {
+      const url = httpsUrl(entry.url);
+      if (url) return { kind: 'web', url };
+    }
+    throw new Error('无效的标签会话');
+  }), activeIndex };
 }
 
 /** 只写入最新排队快照；同目录替换失败时保留上一份正式文件。 */
@@ -50,8 +64,9 @@ export function sessionStore(file: string, absolute: (input: unknown) => string,
   return {
     async load(): Promise<TabSession | null> {
       try {
-        const snapshot = validateSession(JSON.parse(await readFile(file, 'utf8')), absolute);
-        saved = JSON.stringify(snapshot);
+        const data: unknown = JSON.parse(await readFile(file, 'utf8'));
+        const snapshot = validateSession(data, absolute);
+        saved = JSON.stringify(data);
         return snapshot;
       } catch { return null; }
     },

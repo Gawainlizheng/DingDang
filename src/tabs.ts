@@ -1,5 +1,6 @@
 import type { Listing } from './contracts';
 import type { Column } from './sort';
+import type { WebState } from './web-contract';
 
 export type Navigation = 'push' | 'refresh' | 'background' | number;
 
@@ -8,6 +9,7 @@ export function beginNavigation(tab: FolderTab, request: number, mode: Navigatio
 }
 
 export interface FolderTab {
+  kind: 'folder';
   id: number;
   listing?: Listing;
   address: string;
@@ -23,8 +25,14 @@ export interface FolderTab {
 }
 
 export function folderTab(id: number, address = ''): FolderTab {
-  return { id, address, history: [], cursor: -1, selection: [], anchor: null,
+  return { kind: 'folder', id, address, history: [], cursor: -1, selection: [], anchor: null,
     column: 'name', ascending: true, notice: '', request: 0, loading: false };
+}
+
+export interface WebTab { kind: 'web'; id: number; address: string; state: WebState }
+export type Tab = FolderTab | WebTab;
+export function webTab(id: number, url: string): WebTab {
+  return { kind: 'web', id, address: url, state: { url, title: '', loading: false, back: false, forward: false } };
 }
 
 /** 只接收仍存在的标签的最新响应；刷新不推进历史，也保留仍存在的选中项。 */
@@ -46,12 +54,12 @@ export function finishNavigation(tabs: FolderTab[], id: number, request: number,
   });
 }
 
-export function neighborAfterClose(tabs: FolderTab[], id: number): number | undefined {
+export function neighborAfterClose(tabs: { id: number }[], id: number): number | undefined {
   const index = tabs.findIndex(tab => tab.id === id);
   return index < 0 ? undefined : (tabs[index + 1] ?? tabs[index - 1])?.id;
 }
 /** 移动标签对象，不改写其中的路径、历史或选区。 */
-export function moveTab(tabs: FolderTab[], id: number, index: number): FolderTab[] {
+export function moveTab<T extends { id: number }>(tabs: T[], id: number, index: number): T[] {
   const from = tabs.findIndex(tab => tab.id === id);
   if (from < 0 || index < 0 || index >= tabs.length || index === from) return tabs;
   const next = [...tabs];

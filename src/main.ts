@@ -9,6 +9,8 @@ import { windows } from './windows';
 import { menuWorker } from './menu-worker';
 import { tabSessionChannels } from './tab-session';
 import { sessionStore } from './session-store';
+import { webViews } from './web-views';
+import { webChannels } from './web-contract';
 
 const page = path.join(__dirname, 'index.html');
 const trustedUrl = pathToFileURL(page).href;
@@ -78,6 +80,12 @@ app.whenReady().then(() => {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   window.removeMenu();
+  const browser = webViews(window);
+  ipcMain.handle(webChannels.display, (event, input: unknown) => { trusted(event); browser.display(input); });
+  ipcMain.handle(webChannels.command, (event, id: unknown, action: unknown, url: unknown) => {
+    trusted(event); browser.command(id, action, url);
+  });
+  ipcMain.handle(webChannels.close, (event, id: unknown) => { trusted(event); browser.close(id); });
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));

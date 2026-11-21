@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { channels, type Files } from './contracts';
 import { tabSessionChannels, type TabSession } from './tab-session';
+import { webChannels, type WebEvent, type WebTabs } from './web-contract';
 
 /** 暴露固定方法，不把 ipcRenderer 或任意频道名交给页面。 */
 const api: Files = {
@@ -16,6 +17,17 @@ const api: Files = {
   extractZip: target => ipcRenderer.invoke(channels.extractZip, target),
 };
 contextBridge.exposeInMainWorld('files', api);
+const webTabs: WebTabs = {
+  display: view => ipcRenderer.invoke(webChannels.display, view),
+  command: (id, command, url) => ipcRenderer.invoke(webChannels.command, id, command, url),
+  close: id => ipcRenderer.invoke(webChannels.close, id),
+  subscribe(receive) {
+    const listener = (_event: Electron.IpcRendererEvent, value: WebEvent) => receive(value);
+    ipcRenderer.on(webChannels.event, listener);
+    return () => ipcRenderer.removeListener(webChannels.event, listener);
+  },
+};
+contextBridge.exposeInMainWorld('webTabs', webTabs);
 contextBridge.exposeInMainWorld('tabSession', {
   loadTabSession: () => ipcRenderer.invoke(tabSessionChannels.load),
   saveTabSession: (snapshot: TabSession) => ipcRenderer.invoke(tabSessionChannels.save, snapshot),

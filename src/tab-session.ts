@@ -1,21 +1,29 @@
 import type { Listing } from './contracts';
+import type { Tab } from './tabs';
 
-export interface TabSession { version: 1; paths: string[]; activeIndex: number }
+export type SessionEntry = { kind: 'folder'; path: string } | { kind: 'web'; url: string };
+export interface TabSession { version: 2; entries: SessionEntry[]; activeIndex: number }
 export const maxSessionTabs = 1024;
 export const tabSessionChannels = { load: 'tabs:load-session', save: 'tabs:save-session' };
 
-export function sessionSnapshot(tabs: { id: number; listing?: Listing }[], active: number): TabSession | null {
-  const loaded = tabs.filter(tab => tab.listing).slice(0, maxSessionTabs);
+export function sessionSnapshot(tabs: Tab[], active: number): TabSession | null {
+  const loaded = tabs.flatMap<{ id: number; entry: SessionEntry }>(tab => {
+    if (tab.kind === 'web') return [{ id: tab.id, entry: { kind: 'web', url: tab.state.url } }];
+    return tab.listing ? [{ id: tab.id, entry: { kind: 'folder', path: tab.listing.path } }] : [];
+  }).slice(0, maxSessionTabs);
   if (!loaded.length) return null;
-  return { version: 1, paths: loaded.map(tab => tab.listing!.path),
+  return { version: 2, entries: loaded.map(tab => tab.entry),
     activeIndex: Math.max(0, loaded.findIndex(tab => tab.id === active)) };
 }
 
-/** 先加载活动目录，再并发读取剩余目录；结果按原始索引排列。 */
+/** 文件夹并发恢复并保持原序，网页只恢复地址，不在这里联网。 */
 export async function restoreTabSession(session: TabSession, list: (path: string) => Promise<Listing>) {
-  const results = Array<Listing | undefined>(session.paths.length).fill(undefined);
+  type Restored = { kind: 'folder'; listing: Listing } | { kind: 'web'; url: string };
+  const results = Array<Restored | undefined>(session.entries.length).fill(undefined);
   async function load(index: number) {
-    try { results[index] = await list(session.paths[index]); } catch { /* 保留其他可用标签 */ }
+    const entry = session.entries[index];
+    if (entry.kind === 'web') { results[index] = entry; return; }
+    try { results[index] = { kind: 'folder', listing: await list(entry.path) }; } catch { /* 保留其他可用标签 */ }
   }
   await load(session.activeIndex);
   let next = 0;
@@ -25,6 +33,6 @@ export async function restoreTabSession(session: TabSession, list: (path: string
       if (index !== session.activeIndex) await load(index);
     }
   }));
-  const tabs = results.flatMap((listing, index) => listing ? [{ index, listing }] : []);
+  const tabs = results.flatMap((item, index) => item ? [{ index, ...item }] : []);
   return { tabs, activeIndex: Math.max(0, tabs.findIndex(tab => tab.index === session.activeIndex)) };
 }

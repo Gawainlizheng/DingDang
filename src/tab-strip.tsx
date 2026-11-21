@@ -1,8 +1,8 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import type { FolderTab } from './tabs';
+import type { Tab } from './tabs';
 
 export function TabStrip({ tabs, active, home, pending, add, close, select, reorder }: {
-  tabs: FolderTab[]; active: number; home?: string; pending: boolean;
+  tabs: Tab[]; active: number; home?: string; pending: boolean;
   add: () => void; close: (id: number) => void; select: (id: number) => void;
   reorder: (id: number, index: number) => void;
 }) {
@@ -75,12 +75,13 @@ export function TabStrip({ tabs, active, home, pending, add, close, select, reor
     measure();
   }
   return <div className="tabs">
-    <div ref={strip} onScroll={measure} className="tabStrip" role="tablist" aria-label="文件夹标签页">
+    <div ref={strip} onScroll={measure} className="tabStrip" role="tablist" aria-label="文件夹和网页标签页">
       {tabs.map(item => {
-        const target = item.listing?.path ?? item.address;
-        const label = target === home ? '用户目录' : target.split(/[\\/]/).filter(Boolean).at(-1) || '用户目录';
+        const target = item.kind === 'web' ? item.state.url : item.listing?.path ?? item.address;
+        const label = item.kind === 'web' ? item.state.title || new URL(item.state.url).host
+          : target === home ? '用户目录' : target.split(/[\\/]/).filter(Boolean).at(-1) || '用户目录';
         return <div data-tab={item.id} className={`tab${item.id === active ? ' active' : ''}${item.id === dragging ? ' dragging' : ''}`} key={item.id}>
-          <button role="tab" aria-selected={item.id === active} aria-controls="folder-panel" title={target}
+          <button role="tab" aria-selected={item.id === active} aria-controls="tab-panel" title={target}
             onClick={event => { if (!event.detail || !suppress.current) select(item.id); suppress.current = false; }}
             onPointerDown={event => {
               if (event.pointerType !== 'mouse' || event.button !== 0 || gesture.current) return;
@@ -99,7 +100,10 @@ export function TabStrip({ tabs, active, home, pending, add, close, select, reor
               }
             }}
             onPointerUp={event => end(event.pointerId)} onPointerCancel={event => end(event.pointerId)}
-            onLostPointerCapture={event => end(event.pointerId)}>{label}</button>
+            onLostPointerCapture={event => end(event.pointerId)}><span className={`tabIcon ${item.kind}`} aria-hidden="true">
+              {item.kind === 'web' ? <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><ellipse cx="8" cy="8" rx="2.6" ry="6"/><path d="M2 8h12"/></svg>
+                : <svg viewBox="0 0 16 16"><path d="M2 4h5l1.5 2H14v6.5H2z"/></svg>}
+            </span>{label}</button>
           <button title="关闭标签页" aria-label={`关闭 ${label}`} disabled={pending} onClick={() => close(item.id)}>×</button>
         </div>;
       })}

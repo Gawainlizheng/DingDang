@@ -1,18 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Entry, Files, ItemResult, Place } from './contracts';
 import { zipMenu } from './zip-menu';
 import { sortEntries, type Column } from './sort';
-import { beginNavigation, finishNavigation, folderTab, moveTab, neighborAfterClose, type FolderTab, type Navigation } from './tabs';
+import { beginNavigation, finishNavigation, folderTab, moveTab, neighborAfterClose, webTab, type Tab, type FolderTab, type Navigation } from './tabs';
 import { TabStrip } from './tab-strip';
 import { ContextMenu, type MenuItem } from './context-menu';
 import type { MenuResult } from './menu-worker';
 import { maxSessionTabs, restoreTabSession, sessionSnapshot, type TabSession } from './tab-session';
+import { classifyAddress } from './address';
+import { defaultSearch, searchUrl } from './search-engine';
+import type { WebCommand, WebEvent, WebTabs } from './web-contract';
 import './ui.css';
 
 declare global {
   interface Window {
     files: Files;
+    webTabs: WebTabs;
     tabSession: {
       loadTabSession(): Promise<TabSession | null>;
       saveTabSession(snapshot: TabSession): Promise<void>;
@@ -21,6 +25,8 @@ declare global {
   }
 }
 const api = window.files;
+const browser = window.webTabs;
+const emptyFolder = folderTab(-1);
 const columns: [Column, string][] = [['name', '名称'], ['modified', '修改日期'], ['type', '类型'], ['size', '大小']];
 const formatDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' });
 const formatSize = (size: number) => size < 1024 ? `${size} B` : `${(size / (size >= 1048576 ? 1048576 : 1024)).toFixed(1)} ${size >= 1048576 ? 'MB' : 'KB'}`;
@@ -31,7 +37,7 @@ type MenuContext = { x: number; y: number; items: MenuItem[]; system?: () => voi
 
 function App() {
   const [places, setPlaces] = useState<Place[]>([]);
-  const [tabs, setTabs] = useState(() => [folderTab(0)]);
+  const [tabs, setTabs] = useState<Tab[]>(() => [folderTab(0)]);
   const tabsRef = useRef(tabs);
   const [active, setActive] = useState(0);
   const activeRef = useRef(0);
@@ -43,7 +49,14 @@ function App() {
   const [systemMenuBusy, setSystemMenuBusy] = useState(false);
   const nextId = useRef(1);
   const tab = tabs.find(item => item.id === active) ?? tabs[0];
-  const { listing, address, history, cursor, selection, column, ascending, notice, loading } = tab;
+  const web = tab.kind === 'web' ? tab : undefined;
+  const { address } = tab;
+  const { listing, history, cursor, selection, anchor, column, ascending, notice, loading } = tab.kind === 'folder' ? tab : emptyFolder;
+  const [addressIssue, setAddressIssue] = useState('');
+  const addressInput = useRef<HTMLInputElement>(null);
+  const webPanel = useRef<HTMLElement>(null);
+  const addressKind = classifyAddress(address);
+  const webId = web?.id;
   function saveSession() {
     if (!restored.current) return;
     const snapshot = sessionSnapshot(tabsRef.current, activeRef.current);
@@ -55,13 +68,13 @@ function App() {
       if (lastSnapshot.current === content) lastSnapshot.current = '';
     });
   }
-  function updateTabs(update: (items: FolderTab[]) => FolderTab[]) {
+  function updateTabs(update: (items: Tab[]) => Tab[]) {
     tabsRef.current = update(tabsRef.current);
     setTabs(tabsRef.current);
     saveSession();
   }
   function patchTab(id: number, patch: Partial<FolderTab>) {
-    updateTabs(items => items.map(item => item.id === id ? { ...item, ...patch } : item));
+    updateTabs(items => items.map(item => item.id === id && item.kind === 'folder' ? { ...item, ...patch } : item));
   }
   const setSelection = (paths: string[]) => patchTab(active, { selection: paths });
   const setNotice = (value: string) => patchTab(active, { notice: value });
@@ -82,12 +95,14 @@ function App() {
 
   async function navigate(id: number, target: string, mode: Navigation = 'push') {
     const request = ++sequence.current;
-    updateTabs(items => items.map(item => item.id === id ? beginNavigation(item, request, mode) : item));
+    updateTabs(items => items.map(item => item.id === id && item.kind === 'folder' ? beginNavigation(item, request, mode) : item));
     try {
       const next = await api.listDirectory(target);
-      updateTabs(items => finishNavigation(items, id, request, mode, { listing: next }));
+      updateTabs(items => items.map(item => item.id === id && item.kind === 'folder'
+        ? finishNavigation([item], id, request, mode, { listing: next })[0] : item));
     } catch (error) {
-      updateTabs(items => finishNavigation(items, id, request, mode, { error: message(error) }));
+      updateTabs(items => items.map(item => item.id === id && item.kind === 'folder'
+        ? finishNavigation([item], id, request, mode, { error: message(error) })[0] : item));
     }
   }
 
@@ -102,7 +117,9 @@ function App() {
         if (saved) {
           const restoredTabs = await restoreTabSession(saved, target => api.listDirectory(target));
           if (restoredTabs.tabs.length) {
-            const items = restoredTabs.tabs.map(({ listing }) => {
+            const items = restoredTabs.tabs.map(item => {
+              if (item.kind === 'web') return webTab(nextId.current++, item.url);
+              const { listing } = item;
               const initial = folderTab(nextId.current++, listing.path);
               return finishNavigation([initial], initial.id, 0, 'push', { listing })[0];
             });
@@ -122,14 +139,52 @@ function App() {
     void initialize();
   }, []);
 
+  useLayoutEffect(() => {
+    if (restoring) return;
+    if (webId === undefined) {
+      void browser.display(null).catch(() => {});
+      return;
+    }
+    const panel = webPanel.current!;
+    function resize() {
+      const item = tabsRef.current.find(candidate => candidate.id === webId);
+      if (item?.kind !== 'web' || activeRef.current !== item.id) return;
+      const { x, y, width, height } = panel.getBoundingClientRect();
+      void browser.display({ id: item.id, url: item.state.url, bounds: { x, y, width, height } })
+        .catch(error => { if (activeRef.current === webId) setAddressIssue(message(error)); });
+    }
+    const observer = new ResizeObserver(resize);
+    observer.observe(panel);
+    resize();
+    return () => observer.disconnect();
+  }, [webId, restoring]);
+
+  const handleWebEvent = useRef<(event: WebEvent) => void>(() => {});
+  handleWebEvent.current = event => {
+    if (event.type === 'state') {
+      updateTabs(items => items.map(item => item.kind === 'web' && item.id === event.id ? {
+        ...item, state: event.state,
+        address: item.state.url !== event.state.url ? event.state.url : item.address,
+      } : item));
+    } else if (activeRef.current === event.id) {
+      if (event.type === 'link') addWebTab(event.url, event.background);
+      else if (event.shortcut === 'address') { addressInput.current?.focus(); addressInput.current?.select(); }
+      else if (event.shortcut === 'new') addTab();
+      else if (event.shortcut === 'close') closeTab(event.id);
+      else cycleTabs(event.shortcut === 'previous' ? -1 : 1);
+    }
+  };
+  useLayoutEffect(() => browser.subscribe(event => handleWebEvent.current(event)), []);
+
   useEffect(() => {
     if (editor || confirm) dialog.current?.showModal();
     else dialog.current?.close();
   }, [Boolean(editor), confirm]);
 
   function go(target: string, mode?: 'refresh' | number) {
-    if (!busy.current && target) {
+    if (!busy.current && target && tab.kind === 'folder') {
       ++menuRequest.current;
+      setAddressIssue('');
       setNotice('');
       setResults([]);
       setMenu(undefined);
@@ -155,7 +210,7 @@ function App() {
     } catch (error) {
       setNotice(message(error));
     } finally {
-      await Promise.all(tabsRef.current.map(item => item.listing && !item.loading
+      await Promise.all(tabsRef.current.map(item => item.kind === 'folder' && item.listing && !item.loading
         ? navigate(item.id, item.listing.path, 'refresh') : undefined));
       busy.current = false;
       setPending(false);
@@ -165,6 +220,11 @@ function App() {
   function switchTo(id: number) {
     ++menuRequest.current;
     setMenu(undefined);
+    setAddressIssue('');
+    if (tabsRef.current.find(item => item.id === id)?.kind === 'web') {
+      setEditor(undefined);
+      setConfirm(false);
+    }
     setActive(id);
     activeRef.current = id;
     saveSession();
@@ -178,19 +238,55 @@ function App() {
     void navigate(id, target);
   }
 
+  function addWebTab(url: string, background = false) {
+    if (busy.current || tabsRef.current.length >= maxSessionTabs) return;
+    const id = nextId.current++;
+    updateTabs(items => [...items, webTab(id, url)]);
+    if (!background) switchTo(id);
+  }
+
+  function cycleTabs(direction: number) {
+    const items = tabsRef.current;
+    const index = items.findIndex(item => item.id === activeRef.current);
+    switchTo(items[(index + direction + items.length) % items.length].id);
+  }
+
+  function webCommand(action: WebCommand, url?: string) {
+    if (busy.current || !web) return;
+    setAddressIssue('');
+    void browser.command(web.id, action, url).catch(error => {
+      if (activeRef.current === web.id) setAddressIssue(message(error));
+    });
+  }
+
+  function openWeb(url: string) {
+    if (web) {
+      updateTabs(items => items.map(item => item.id === web.id ? { ...item, address: url } : item));
+      webCommand('navigate', url);
+    } else addWebTab(url);
+  }
+
+  function submitAddress() {
+    if (addressKind.kind === 'web') openWeb(addressKind.value);
+    else if (addressKind.kind === 'folder') {
+      if (web) addTab(addressKind.value);
+      else go(addressKind.value);
+    } else if (addressKind.kind === 'invalid') setAddressIssue('请输入有效的 HTTPS 网址或 Windows 本地路径');
+  }
+
   function closeTab(id: number) {
     if (busy.current) return;
     const neighbor = neighborAfterClose(tabsRef.current, id);
     if (neighbor === undefined) {
-      if (!places[0]) return;
       const replacement = nextId.current++;
-      updateTabs(() => [folderTab(replacement, places[0].path)]);
+      updateTabs(() => [folderTab(replacement, places[0]?.path)]);
       switchTo(replacement);
-      void navigate(replacement, places[0].path);
+      if (places[0]) void navigate(replacement, places[0].path);
     } else {
       updateTabs(items => items.filter(item => item.id !== id));
-      if (id === active) switchTo(neighbor);
+      if (id === activeRef.current) switchTo(neighbor);
     }
+    void browser.close(id).catch(() => {});
   }
 
   function paste() {
@@ -206,8 +302,8 @@ function App() {
 
   function select(entry: Entry, event: React.MouseEvent) {
     if (busy.current) return;
-    if (event.shiftKey && tab.anchor) {
-      const first = entries.findIndex(item => item.path === tab.anchor);
+    if (event.shiftKey && anchor) {
+      const first = entries.findIndex(item => item.path === anchor);
       const last = entries.indexOf(entry);
       if (first >= 0) {
         const range = entries.slice(Math.min(first, last), Math.max(first, last) + 1).map(item => item.path);
@@ -231,14 +327,15 @@ function App() {
       const key = event.key.toLowerCase();
       if (event.altKey && !event.ctrlKey && ['arrowleft', 'arrowright', 'arrowup'].includes(key)) {
         event.preventDefault();
-        if (key === 'arrowleft') go(history[cursor - 1], cursor - 1);
-        else if (key === 'arrowright') go(history[cursor + 1], cursor + 1);
+        if (key === 'arrowleft') web ? webCommand('back') : go(history[cursor - 1], cursor - 1);
+        else if (key === 'arrowright') web ? webCommand('forward') : go(history[cursor + 1], cursor + 1);
         else if (listing && listing.parent !== listing.path) go(listing.parent);
-      } else if (event.ctrlKey && !event.altKey && ['t', 'w', 'tab'].includes(key)) {
+      } else if (event.ctrlKey && !event.altKey && ['t', 'w', 'tab', 'l'].includes(key)) {
         event.preventDefault();
         if (key === 't') addTab();
         else if (key === 'w') closeTab(active);
-        else switchTo(tabs[(tabs.indexOf(tab) + (event.shiftKey ? -1 : 1) + tabs.length) % tabs.length].id);
+        else if (key === 'l') addressInput.current?.focus();
+        else cycleTabs(event.shiftKey ? -1 : 1);
       }
     }
     window.addEventListener('keydown', shortcuts);
@@ -295,7 +392,7 @@ function App() {
       } else if (result === 'invoked' || result === 'failed') {
         if (result === 'failed' && current) patchTab(active, { notice: 'Windows 未能执行所选命令' });
         for (const item of tabsRef.current) {
-          if (!busy.current && item.listing && !item.loading) void navigate(item.id, item.listing.path, 'background');
+          if (!busy.current && item.kind === 'folder' && item.listing && !item.loading) void navigate(item.id, item.listing.path, 'background');
         }
       } else if (result === 'unavailable' && current) {
         patchTab(active, { notice: '无法打开 Windows 系统菜单，已恢复 DingDang 菜单' });
@@ -312,6 +409,10 @@ function App() {
   return <div className="app" onKeyDown={event => {
     if (pending || loading || menu || editor || confirm || event.target instanceof HTMLInputElement) return;
     const key = event.key.toLowerCase();
+    if (web) {
+      if (key === 'f5') { event.preventDefault(); webCommand('reload'); }
+      return;
+    }
     if (event.ctrlKey && (key === 'c' || key === 'x') && selection.length) {
       event.preventDefault();
       setClipboard({ mode: key === 'c' ? 'copy' : 'move', paths: selection });
@@ -327,23 +428,33 @@ function App() {
         add={() => addTab()} close={closeTab} select={switchTo}
         reorder={(id, index) => updateTabs(items => moveTab(items, id, index))} />
       <div className="navigation">
-        <button title="后退 (Alt+←)" aria-label="后退" disabled={pending || cursor < 1} onClick={() => go(history[cursor - 1], cursor - 1)}>←</button>
-        <button title="前进 (Alt+→)" aria-label="前进" disabled={pending || cursor >= history.length - 1} onClick={() => go(history[cursor + 1], cursor + 1)}>→</button>
+        <button title="后退 (Alt+←)" aria-label="后退" disabled={pending || (web ? !web.state.back : cursor < 1)} onClick={() => web ? webCommand('back') : go(history[cursor - 1], cursor - 1)}>←</button>
+        <button title="前进 (Alt+→)" aria-label="前进" disabled={pending || (web ? !web.state.forward : cursor >= history.length - 1)} onClick={() => web ? webCommand('forward') : go(history[cursor + 1], cursor + 1)}>→</button>
         <button title="上一级 (Alt+↑)" aria-label="上一级" disabled={pending || !listing || listing.parent === listing.path} onClick={() => listing && go(listing.parent)}>↑</button>
-        <button title="刷新" aria-label="刷新" disabled={pending || !listing} onClick={() => listing && go(listing.path, 'refresh')}>↻</button>
-        <form onSubmit={event => { event.preventDefault(); go(address); }}>
-          <input aria-label="地址栏" value={address} disabled={pending} onChange={event => patchTab(active, { address: event.target.value })} onFocus={event => event.target.select()} placeholder="输入本地路径，例如 C:\" />
+        <button title="刷新" aria-label="刷新" disabled={pending || (!web && !listing)} onClick={() => web ? webCommand('reload') : listing && go(listing.path, 'refresh')}>↻</button>
+        <form onSubmit={event => { event.preventDefault(); submitAddress(); }}>
+          <input ref={addressInput} aria-label="地址栏" value={address} disabled={pending} onChange={event => {
+            const value = event.target.value;
+            setAddressIssue('');
+            updateTabs(items => items.map(item => item.id === active ? { ...item, address: value } : item));
+          }} onFocus={event => event.target.select()} placeholder="输入本地路径或 HTTPS 网址" />
+          {addressKind.kind === 'search' && <button type="button" className="searchAction" disabled={pending}
+            onClick={() => openWeb(searchUrl(addressKind.value))}>用 {defaultSearch.label} 搜索</button>}
         </form>
       </div>
+      {addressIssue && <div className="addressIssue" role="status">{addressIssue}</div>}
     </header>
-    <div className="workspace">
+    {web ? <main ref={webPanel} id="tab-panel" role="tabpanel" className="webPanel" aria-busy={web.state.loading}>
+      {web.state.error && <div className="webError"><strong>{web.state.error}</strong>
+        <button onClick={() => webCommand('reload')}>重试</button></div>}
+    </main> : <div className="workspace">
       <aside aria-label="常用位置和磁盘">
         <h2>常用位置</h2>
         {places.slice(0, 4).map(place => <button key={place.label} className={listing?.path === place.path ? 'active' : ''} disabled={pending} onClick={() => go(place.path)}><span>◇</span>{place.label}</button>)}
         <h2>磁盘</h2>
         {places.slice(4).map(place => <button key={place.path} className={listing?.path === place.path ? 'active' : ''} disabled={pending} onClick={() => go(place.path)}><span>▱</span>{place.label}</button>)}
       </aside>
-      <main id="folder-panel" role="tabpanel">
+      <main id="tab-panel" role="tabpanel">
         <div className="toolbar" aria-label="文件操作" inert={loading}>
           <button disabled={pending || !listing} onClick={() => setEditor({ title: '新建文件夹', value: '' })}>＋ 新建文件夹</button>
           <button disabled={pending || !selection.length} onClick={() => setClipboard({ mode: 'copy', paths: selection })}>复制</button>
@@ -370,8 +481,8 @@ function App() {
           {results.length > 0 && <details open={results.some(item => !item.ok)}><summary>逐项结果</summary><ul>{results.map((item, index) => <li key={index}>{item.ok ? '成功' : '失败'} · {item.path}{item.error ? ` — ${item.error}` : ''}</li>)}</ul></details>}
         </div>}
       </main>
-    </div>
-    <footer>{entries.length} 个项目 <span>{selection.length ? `已选 ${selection.length} 项` : ''}</span><strong>{pending ? '正在处理…' : '本地文件'}</strong></footer>
+    </div>}
+    <footer>{web ? new URL(web.state.url).host : `${entries.length} 个项目`} <span>{selection.length ? `已选 ${selection.length} 项` : ''}</span><strong>{pending ? '正在处理…' : web ? web.state.loading ? '正在加载…' : '网页 · HTTPS' : '本地文件'}</strong></footer>
     {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.system ? [...menu.items, {
       label: systemMenuBusy ? 'Windows 系统菜单…（上一项处理中）' : 'Windows 系统菜单…',
       disabled: systemMenuBusy, run: menu.system,

@@ -8,7 +8,7 @@
   "scripts": {
     "check": "tsc --noEmit",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/*.test.ts",
-    "build": "npm run check && vite build --emptyOutDir false && esbuild src/main.ts src/preload.ts --bundle --platform=node --external:electron --format=cjs --out-extension:.js=.cjs --outdir=dist",
+    "build": "npm run check && vite build --emptyOutDir false && esbuild src/main.ts src/preload.ts src/web-guest.ts --bundle --platform=node --external:electron --format=cjs --out-extension:.js=.cjs --outdir=dist",
     "build:native": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File native/build.ps1",
     "start": "npm run build && npm run build:native && electron .",
     "package:win": "npm run build && electron-builder --win nsis --x64"
