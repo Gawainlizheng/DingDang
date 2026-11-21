@@ -15,13 +15,23 @@ test('Windows 路径和名称拒绝设备路径、盘符相对路径和备用数
   for (const input of ['..', 'a/b', 'CON.txt', 'x.']) assert.throws(() => nameOf(input));
 });
 
-test('排序保留文件夹优先，使用自然数字顺序，不修改原数组', () => {
-  const entry = (name: string, kind: Entry['kind'], size: number): Entry =>
-    ({ name, kind, size, path: name, type: kind, modified: size });
-  const entries = [entry('文件10', 'file', 12), entry('文件2', 'file', 2), entry('目录', 'folder', 0)];
-  assert.deepEqual(sortEntries(entries, 'name', true).map(item => item.name), ['目录', '文件2', '文件10']);
-  assert.deepEqual(sortEntries(entries, 'size', false).map(item => item.name), ['目录', '文件10', '文件2']);
-  assert.equal(entries[0].name, '文件10');
+test('文件和文件夹按名称、日期、类型统一排序，无数值的项目始终在末尾', () => {
+  const entries: Entry[] = [
+    { path: 'item10.zip', name: 'item10.zip', kind: 'file', type: 'ZIP', size: 12, modified: 3 },
+    { path: 'item3', name: 'item3', kind: 'folder', type: '文件夹', size: null, modified: 2 },
+    { path: 'item2.txt', name: 'item2.txt', kind: 'file', type: 'TXT', size: 0, modified: 2 },
+    { path: 'item20', name: 'item20', kind: 'unknown', type: '文件', size: null, modified: null },
+  ];
+  const sorted = (column: Parameters<typeof sortEntries>[1], ascending: boolean) =>
+    sortEntries(entries, column, ascending).map(item => item.name);
+  assert.deepEqual(sorted('name', true), ['item2.txt', 'item3', 'item10.zip', 'item20']);
+  assert.deepEqual(sorted('modified', false), ['item10.zip', 'item3', 'item2.txt', 'item20']);
+  assert.deepEqual(sorted('modified', true), ['item2.txt', 'item3', 'item10.zip', 'item20']);
+  assert.deepEqual(sorted('type', true), ['item20', 'item3', 'item2.txt', 'item10.zip']);
+  assert.deepEqual(sorted('type', false), ['item10.zip', 'item2.txt', 'item3', 'item20']);
+  assert.deepEqual(sorted('size', true), ['item2.txt', 'item10.zip', 'item3', 'item20']);
+  assert.deepEqual(sorted('size', false), ['item10.zip', 'item2.txt', 'item20', 'item3']);
+  assert.deepEqual(entries.map(item => item.name), ['item10.zip', 'item3', 'item2.txt', 'item20']);
 });
 
 test('临时目录：复制、逐项冲突、重命名、移动、回收失败', async context => {

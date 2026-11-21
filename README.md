@@ -4,6 +4,8 @@
 
 ## 开发和打包
 
+在 DingDang 右键菜单中，单选或多选文件和文件夹可使用「压缩为 ZIP…」；单选 ZIP 可使用「解压到同名文件夹」。结果写入当前目录，不覆盖同名项目。解压上限为 10 万个条目和 32 GiB，不支持加密 ZIP。
+
 多标签仅浏览文件夹。使用 `Ctrl+T` 新建、`Ctrl+W` 关闭、`Ctrl+Tab` 切换；`Alt+←`、`Alt+→`、`Alt+↑` 分别后退、前进和返回上一级。右键文件或列表空白处可打开应用内菜单，复制和剪切可跨标签粘贴。
 
 在 Windows 上使用 Node.js 22、npm 和 VS Code。进入项目目录后执行：
@@ -41,7 +43,7 @@ npm run package:win
 
 ## Windows 原生右键菜单实验
 
-在 `experiment/windows-context-menu` 分支运行 `npm.cmd start`；需要 Visual Studio 的 C++ 桌面开发工具和 Windows SDK。单选项目右键直接打开 Windows 经典菜单；空白区域、多选及原生菜单不可用时使用 DingDang 菜单。系统菜单中的复制和删除遵循 Windows 规则，不使用 DingDang 剪贴板或删除确认。请用临时文件试用。
+在 `experiment/windows-context-menu-a` 分支运行 `npm.cmd start`；需要 Visual Studio 的 C++ 桌面开发工具和 Windows SDK。右键默认显示 DingDang 菜单；单选时可点「Windows 系统菜单…」打开 Windows 经典菜单。系统菜单中的复制和删除遵循 Windows 规则，不使用 DingDang 剪贴板或删除确认。请用临时文件试用。
 
 ### 对比右键延迟（CMD）
 
@@ -51,4 +53,4 @@ set "DINGDANG_MENU_COLD=1"
 npm.cmd start
 ```
 
-用同一个临时 JPG 和文件夹分别右击数次，每次按 Esc 关闭。退出应用后执行 `set "DINGDANG_MENU_COLD="`，再运行 `npm.cmd start` 测量预热模式。比较首次和后续的 `elapsedMs`，以及 `startupMs`、`parseMs`、`shellMs`。预热模式通常保持同一个 PID；日志在弹出前采样，不含路径、菜单等待或执行命令的时间。冷启动是同一个实现的逐次启动对照，并非旧版二进制。
+用同一个临时 JPG 和文件夹分别打开「Windows 系统菜单…」数次，每次按 Esc 关闭。退出应用后执行 `set "DINGDANG_MENU_COLD="`，再运行 `npm.cmd start` 测量预热模式。比较首次和后续的 `elapsedMs`，以及 `startupMs`、`parseMs`、`shellMs`。预热模式通常保持同一个 PID；日志在弹出前采样，不含路径、菜单等待或执行命令的时间。冷启动是同一个实现的逐次启动对照，并非旧版二进制。

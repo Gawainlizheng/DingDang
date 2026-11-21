@@ -1,12 +1,28 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { finishNavigation, folderTab, moveTab, neighborAfterClose, type FolderTab, type Navigation } from '../src/tabs.ts';
+import { beginNavigation, finishNavigation, folderTab, moveTab, neighborAfterClose, type FolderTab, type Navigation } from '../src/tabs.ts';
 
 function visit(tabs: FolderTab[], id: number, path: string, mode: Navigation = 'push') {
   const requested = tabs.map(tab => tab.id === id ? { ...tab, request: tab.request + 1 } : tab);
   return finishNavigation(requested, id, requested.find(tab => tab.id === id)!.request,
     mode, { listing: { path, parent: '/', entries: [] } });
 }
+
+test('后台刷新不阻塞交互，保留编辑中的地址和刷新期间的选区', () => {
+  const [tab] = visit([folderTab(1)], 1, '/docs');
+  const refreshing = beginNavigation({ ...tab, address: '/typing' }, 2, 'background');
+  assert.equal(refreshing.loading, false);
+  assert.equal(refreshing.listing, tab.listing);
+  const file = { path: '/docs/photo.jpg', name: 'photo.jpg', kind: 'file' as const, type: 'JPG', size: 12, modified: null };
+  const outcome = { listing: { ...tab.listing!, entries: [file] } };
+  const [updated] = finishNavigation([{ ...refreshing, selection: [file.path, '/removed'] }], 1, 2, 'background', outcome);
+  assert.deepEqual(updated.selection, [file.path]);
+  assert.equal(updated.address, '/typing');
+  assert.equal(updated.history, tab.history);
+  const navigating = beginNavigation(refreshing, 3, 'push');
+  assert.equal(finishNavigation([navigating], 1, 2, 'background', outcome)[0], navigating);
+  assert.deepEqual(finishNavigation([], 1, 2, 'background', outcome), []);
+});
 
 test('标签各自保留历史，从后退位置打开新目录时截断前进历史', () => {
   let tabs = [folderTab(1), folderTab(2)];

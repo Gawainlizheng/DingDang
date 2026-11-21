@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Entry, Files, ItemResult } from './contracts';
+import { zipOperations } from './zip.ts';
 
 /** 仅接受完整的本机路径；Windows 拒绝设备命名空间、相对盘符路径和备用数据流。 */
 export function absolute(input: unknown, windows = process.platform === 'win32'): string {
@@ -113,6 +114,7 @@ export function fileService(platform: Platform): Files {
 
   return {
     places: platform.places,
+    ...zipOperations(absolute, nameOf),
     async listDirectory(input) {
       const folder = absolute(input);
       const children = await fs.readdir(folder, { withFileTypes: true });

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Entry, Files, ItemResult, Place } from './contracts';
+import { zipMenu } from './zip-menu';
 import { sortEntries, type Column } from './sort';
-import { finishNavigation, folderTab, moveTab, neighborAfterClose, type FolderTab, type Navigation } from './tabs';
+import { beginNavigation, finishNavigation, folderTab, moveTab, neighborAfterClose, type FolderTab, type Navigation } from './tabs';
 import { TabStrip } from './tab-strip';
 import { ContextMenu, type MenuItem } from './context-menu';
 import type { MenuResult } from './menu-worker';
@@ -20,7 +21,8 @@ const formatDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeSt
 const formatSize = (size: number) => size < 1024 ? `${size} B` : `${(size / (size >= 1048576 ? 1048576 : 1024)).toFixed(1)} ${size >= 1048576 ? 'MB' : 'KB'}`;
 const message = (error: unknown) => String(error instanceof Error ? error.message : error).replace(/^Error invoking remote method '[^']+': Error: /, '');
 type Clipboard = { mode: 'copy' | 'move'; paths: string[] };
-type Editor = { title: string; value: string; source?: string };
+type Editor = { title: string; value: string; source?: string; zipPaths?: string[] };
+type MenuContext = { x: number; y: number; items: MenuItem[]; system?: () => void };
 
 function App() {
   const [places, setPlaces] = useState<Place[]>([]);
@@ -29,6 +31,7 @@ function App() {
   const [active, setActive] = useState(0);
   const menuRequest = useRef(0);
   const nativeMenuPending = useRef(false);
+  const [systemMenuBusy, setSystemMenuBusy] = useState(false);
   const nextId = useRef(1);
   const tab = tabs.find(item => item.id === active) ?? tabs[0];
   const { listing, address, history, cursor, selection, column, ascending, notice, loading } = tab;
@@ -51,14 +54,14 @@ function App() {
   const sequence = useRef(0);
   const busy = useRef(false);
   const dialog = useRef<HTMLDialogElement>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] }>();
+  const [menu, setMenu] = useState<MenuContext>();
   const entries = useMemo(() => sortEntries(listing?.entries ?? [], column, ascending), [listing, column, ascending]);
   const selected = useMemo(() => new Set(selection), [selection]);
   const single = selection.length === 1 ? listing?.entries.find(entry => entry.path === selection[0]) : undefined;
 
   async function navigate(id: number, target: string, mode: Navigation = 'push') {
     const request = ++sequence.current;
-    patchTab(id, { request, loading: true });
+    updateTabs(items => items.map(item => item.id === id ? beginNavigation(item, request, mode) : item));
     try {
       const next = await api.listDirectory(target);
       updateTabs(items => finishNavigation(items, id, request, mode, { listing: next }));
@@ -93,6 +96,7 @@ function App() {
   async function operate(action: () => Promise<ItemResult[] | void>) {
     if (busy.current || !listing || loading) return;
     busy.current = true;
+    ++menuRequest.current;
     setPending(true);
     setNotice('');
     setResults([]);
@@ -197,7 +201,7 @@ function App() {
   function showMenu(event: React.MouseEvent, entry?: Entry) {
     event.preventDefault();
     event.stopPropagation();
-    if (pending || loading || !listing || nativeMenuPending.current) return;
+    if (pending || loading || !listing) return;
     const paths = entry ? selected.has(entry.path) ? selection : [entry.path] : [];
     if (entry && !selected.has(entry.path)) patchTab(active, { selection: paths, anchor: entry.path });
     const items: MenuItem[] = [];
@@ -213,30 +217,47 @@ function App() {
       items.push({ label: '复制', run: () => setClipboard({ mode: 'copy', paths }) },
         { label: '剪切', run: () => setClipboard({ mode: 'move', paths }) });
       if (paths.length === 1) items.push({ label: '重命名', run: () => setEditor({ title: '重命名', value: entry.name, source: entry.path }) });
+      const { archiveName, extractPath } = zipMenu(listing.entries, paths);
+      if (archiveName) items.push({ label: '压缩为 ZIP…', run: () =>
+        setEditor({ title: '压缩为 ZIP', value: archiveName, zipPaths: paths }) });
+      if (extractPath) items.push({ label: '解压到同名文件夹', run: () => void operate(() => api.extractZip(extractPath)) });
       items.push({ label: '移入回收站', run: () => setConfirm(true) });
     }
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = Math.max(0, event.clientX || bounds.left);
     const y = Math.max(0, event.clientY || bounds.top);
     const request = ++menuRequest.current;
-    if (!entry || paths.length !== 1) {
-      setMenu({ x, y, items });
-      return;
+    const context: MenuContext = { x, y, items };
+    if (entry && paths.length === 1) {
+      context.system = () => {
+        if (busy.current || nativeMenuPending.current || request !== menuRequest.current) return;
+        void showSystemMenu(entry, context, request);
+      };
     }
-    setMenu(undefined);
+    setMenu(context);
+  }
+
+  async function showSystemMenu(entry: Entry, context: MenuContext, request: number) {
     nativeMenuPending.current = true;
-    void window.showWindowsMenu(entry.path, x, y).catch(() => 'unavailable' as const).then(result => {
+    setSystemMenuBusy(true);
+    try {
+      const result = await window.showWindowsMenu(entry.path, context.x, context.y).catch(() => 'unavailable' as const);
+      const current = request === menuRequest.current && tabsRef.current.some(item => item.id === active);
       if (result === 'open-folder') {
-        if (request === menuRequest.current && tabsRef.current.some(item => item.id === active)) go(entry.path);
+        if (current) go(entry.path);
       } else if (result === 'invoked' || result === 'failed') {
-        if (result === 'failed') patchTab(active, { notice: 'Windows 未能执行所选命令' });
+        if (result === 'failed' && current) patchTab(active, { notice: 'Windows 未能执行所选命令' });
         for (const item of tabsRef.current) {
-          if (item.listing && !item.loading) void navigate(item.id, item.listing.path, 'refresh');
+          if (!busy.current && item.listing && !item.loading) void navigate(item.id, item.listing.path, 'background');
         }
-      } else if (result === 'unavailable' && request === menuRequest.current) {
-        setMenu({ x, y, items });
+      } else if (result === 'unavailable' && current) {
+        patchTab(active, { notice: '无法打开 Windows 系统菜单，已恢复 DingDang 菜单' });
+        setMenu(context);
       }
-    }).finally(() => { nativeMenuPending.current = false; });
+    } finally {
+      nativeMenuPending.current = false;
+      setSystemMenuBusy(false);
+    }
   }
 
   return <div className="app" onKeyDown={event => {
@@ -302,13 +323,17 @@ function App() {
       </main>
     </div>
     <footer>{entries.length} 个项目 <span>{selection.length ? `已选 ${selection.length} 项` : ''}</span><strong>{pending ? '正在处理…' : '本地文件'}</strong></footer>
-    {menu && <ContextMenu {...menu} close={() => setMenu(undefined)} />}
+    {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.system ? [...menu.items, {
+      label: systemMenuBusy ? 'Windows 系统菜单…（上一项处理中）' : 'Windows 系统菜单…',
+      disabled: systemMenuBusy, run: menu.system,
+    }] : menu.items} close={() => setMenu(undefined)} />}
     <dialog ref={dialog} onCancel={() => { setEditor(undefined); setConfirm(false); }}>
       {editor && <form onSubmit={event => {
         event.preventDefault();
         if (!listing) return;
         setEditor(undefined);
-        void operate(() => editor.source ? api.renameItem(editor.source, editor.value) : api.createFolder(listing.path, editor.value));
+        void operate(() => editor.zipPaths ? api.createZip(editor.zipPaths, editor.value)
+          : editor.source ? api.renameItem(editor.source, editor.value) : api.createFolder(listing.path, editor.value));
       }}><h2>{editor.title}</h2><label>名称<input required autoFocus value={editor.value} onChange={event => setEditor({ ...editor, value: event.target.value })} /></label>
       <div className="actions"><button type="button" onClick={() => setEditor(undefined)}>取消</button><button className="primary" type="submit">确认</button></div></form>}
       {confirm && <><h2>移入回收站</h2><p>将选中的 {selection.length} 个项目移入回收站？</p><div className="actions">

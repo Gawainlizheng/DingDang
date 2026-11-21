@@ -20,10 +20,13 @@ export interface Files {
   copyItems(paths: string[], destination: string): Promise<ItemResult[]>;
   moveItems(paths: string[], destination: string): Promise<ItemResult[]>;
   trashItems(paths: string[]): Promise<ItemResult[]>;
+  createZip(paths: string[], archiveName: string): Promise<void>;
+  extractZip(path: string): Promise<void>;
 }
 
 export const channels = {
   places: 'files:places', listDirectory: 'files:list', openItem: 'files:open',
   createFolder: 'files:create', renameItem: 'files:rename',
   copyItems: 'files:copy', moveItems: 'files:move', trashItems: 'files:trash',
+  createZip: 'files:zip-create', extractZip: 'files:zip-extract',
 } as const satisfies Record<keyof Files, string>;

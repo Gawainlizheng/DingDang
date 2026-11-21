@@ -11,6 +11,8 @@ const api: Files = {
   copyItems: (items, target) => ipcRenderer.invoke(channels.copyItems, items, target),
   moveItems: (items, target) => ipcRenderer.invoke(channels.moveItems, items, target),
   trashItems: items => ipcRenderer.invoke(channels.trashItems, items),
+  createZip: (items, name) => ipcRenderer.invoke(channels.createZip, items, name),
+  extractZip: target => ipcRenderer.invoke(channels.extractZip, target),
 };
 contextBridge.exposeInMainWorld('files', api);
 contextBridge.exposeInMainWorld('showWindowsMenu', (path: string, x: number, y: number) =>

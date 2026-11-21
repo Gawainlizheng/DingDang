@@ -1,7 +1,11 @@
 import type { Listing } from './contracts';
 import type { Column } from './sort';
 
-export type Navigation = 'push' | 'refresh' | number;
+export type Navigation = 'push' | 'refresh' | 'background' | number;
+
+export function beginNavigation(tab: FolderTab, request: number, mode: Navigation): FolderTab {
+  return { ...tab, request, loading: mode !== 'background' };
+}
 
 export interface FolderTab {
   id: number;
@@ -28,12 +32,13 @@ export function finishNavigation(tabs: FolderTab[], id: number, request: number,
   mode: Navigation, outcome: { listing: Listing } | { error: string }): FolderTab[] {
   return tabs.map(tab => {
     if (tab.id !== id || tab.request !== request) return tab;
+    if (mode === 'background' && ('error' in outcome || outcome.listing.path !== tab.listing?.path)) return tab;
     if ('error' in outcome) return { ...tab, loading: false, notice: outcome.error };
     const { listing } = outcome;
     const push = mode === 'push' && listing.path !== tab.history[tab.cursor];
-    const keep = mode === 'refresh' && listing.path === tab.listing?.path;
+    const keep = (mode === 'refresh' || mode === 'background') && listing.path === tab.listing?.path;
     const available = keep ? new Set(listing.entries.map(entry => entry.path)) : new Set<string>();
-    return { ...tab, listing, address: listing.path, loading: false,
+    return { ...tab, listing, address: mode === 'background' ? tab.address : listing.path, loading: false,
       history: push ? [...tab.history.slice(0, tab.cursor + 1), listing.path] : tab.history,
       cursor: push ? tab.cursor + 1 : typeof mode === 'number' ? mode : tab.cursor,
       selection: tab.selection.filter(item => available.has(item)),

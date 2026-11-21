@@ -14,7 +14,7 @@ const files = fileService(windows);
 let window: BrowserWindow | undefined;
 let menuOpen = false;
 let authorizeMenu: ((pid: number) => boolean) | undefined;
-const nativeDir = path.join(__dirname, '..', '.native-build');
+const nativeDir = path.join(__dirname, '..', '.native-build-a');
 const menus = menuWorker(path.join(nativeDir, 'context-menu.exe'),
   process.env.DINGDANG_MENU_COLD === '1', process.env.DINGDANG_MENU_TIMING === '1');
 
